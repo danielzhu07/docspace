@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16
+    container_name: docspace-db
+    environment:
+      POSTGRES_USER: docspace
+      POSTGRES_PASSWORD: docspacepw
+      POSTGRES_DB: docspace
+    ports:
+      - "5432:5432"
+    volumes:
+      - docspace_pgdata:/var/lib/postgresql/data
+
+volumes:
+  docspace_pgdata:
