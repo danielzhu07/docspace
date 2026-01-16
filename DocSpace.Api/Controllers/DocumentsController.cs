@@ -64,17 +64,35 @@ public class DocumentsController : ControllerBase
         if (content.Length == 0)
             return BadRequest(new { error = "File is empty." });
 
-        var embedding = await _embed.EmbedAsync(content);
-
+        // 1) Create the document (so we have doc.Id)
         var doc = new Document
         {
             FileName = file.FileName,
             Content = content,
-            UploadedAt = DateTimeOffset.UtcNow,
-            Embedding = embedding
+            UploadedAt = DateTimeOffset.UtcNow
         };
 
         _db.Documents.Add(doc);
+        await _db.SaveChangesAsync();
+
+        // 2) Chunk + embed + store chunks
+        var chunks = TextChunker.Chunk(content);
+        var chunkEntities = new List<DocumentChunk>();
+
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            var emb = await _embed.EmbedAsync(chunks[i]);
+
+            chunkEntities.Add(new DocumentChunk
+            {
+                DocumentId = doc.Id,
+                ChunkIndex = i,
+                Content = chunks[i],
+                Embedding = emb
+            });
+        }
+
+        _db.DocumentChunks.AddRange(chunkEntities);
         await _db.SaveChangesAsync();
 
         return Ok(new
@@ -106,17 +124,35 @@ public class DocumentsController : ControllerBase
         if (fileName.Length == 0)
             fileName = "pasted.txt";
 
-        var embedding = await _embed.EmbedAsync(content);
-
+        // 1) Create the document
         var doc = new Document
         {
             FileName = fileName,
             Content = content,
-            UploadedAt = DateTimeOffset.UtcNow,
-            Embedding = embedding
+            UploadedAt = DateTimeOffset.UtcNow
         };
 
         _db.Documents.Add(doc);
+        await _db.SaveChangesAsync();
+
+        // 2) Chunk + embed + store chunks
+        var chunks = TextChunker.Chunk(content);
+        var chunkEntities = new List<DocumentChunk>();
+
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            var emb = await _embed.EmbedAsync(chunks[i]);
+
+            chunkEntities.Add(new DocumentChunk
+            {
+                DocumentId = doc.Id,
+                ChunkIndex = i,
+                Content = chunks[i],
+                Embedding = emb
+            });
+        }
+
+        _db.DocumentChunks.AddRange(chunkEntities);
         await _db.SaveChangesAsync();
 
         return Ok(new

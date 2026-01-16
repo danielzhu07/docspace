@@ -27,54 +27,49 @@ public class SemanticSearchController : ControllerBase
 
         limit = Math.Clamp(limit, 1, 50);
 
-        // Embed the query
         var qVec = await _embed.EmbedAsync(q);
-
-        // Pull recent docs with embeddings
-        var docs = await _db.Documents
-            .Where(d => d.Embedding != null)
-            .OrderByDescending(d => d.UploadedAt)
-            .Take(300)
-            .Select(d => new
-            {
-                d.Id,
-                d.FileName,
-                d.UploadedAt,
-                d.Content,
-                d.Embedding
-            })
-            .ToListAsync();
 
         static float Dot(float[] a, float[] b)
         {
-            float sum = 0f;
+            float s = 0f;
             int n = Math.Min(a.Length, b.Length);
-            for (int i = 0; i < n; i++)
-                sum += a[i] * b[i];
-            return sum;
+            for (int i = 0; i < n; i++) s += a[i] * b[i];
+            return s;
         }
 
-        // embeddings are normalized → dot product == cosine similarity
-        var results = docs
-            .Select(d => new
+        // Load chunk embeddings + parent doc metadata
+        var chunks = await _db.DocumentChunks
+            .Include(c => c.Document)
+            .OrderByDescending(c => c.Document.UploadedAt)
+            .Take(5000) // fine for your scale
+            .Select(c => new
             {
-                id = d.Id,
-                fileName = d.FileName,
-                uploadedAt = d.UploadedAt,
-                score = Dot(d.Embedding!, qVec),
-                snippet = d.Content.Length > 200
-                    ? d.Content.Substring(0, 200)
-                    : d.Content
+                c.DocumentId,
+                c.ChunkIndex,
+                c.Content,
+                c.Embedding,
+                FileName = c.Document.FileName,
+                UploadedAt = c.Document.UploadedAt
             })
-            .OrderByDescending(r => r.score)
+            .ToListAsync();
+
+        // Rank chunks, then keep best chunk per document
+        var bestPerDoc = chunks
+            .Select(c => new
+            {
+                id = c.DocumentId,
+                fileName = c.FileName,
+                uploadedAt = c.UploadedAt,
+                score = Dot(c.Embedding, qVec),
+                snippet = c.Content.Length > 240 ? c.Content.Substring(0, 240) : c.Content
+            })
+            .OrderByDescending(x => x.score)
+            .GroupBy(x => x.id)
+            .Select(g => g.First()) // best chunk for that doc (because already sorted)
+            .OrderByDescending(x => x.score)
             .Take(limit)
             .ToList();
 
-        return Ok(new
-        {
-            query = q,
-            count = results.Count,
-            results
-        });
+        return Ok(new { query = q, count = bestPerDoc.Count, results = bestPerDoc });
     }
 }
