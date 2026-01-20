@@ -26,6 +26,8 @@ builder.Services.AddHttpClient<DocSpace.Api.Services.EmbeddingClient>(c =>
     c.BaseAddress = new Uri("http://localhost:8001");
 });
 
+builder.Services.AddSingleton<SemanticSplitter>();
+
 var app = builder.Build();
 
 app.UseCors();
