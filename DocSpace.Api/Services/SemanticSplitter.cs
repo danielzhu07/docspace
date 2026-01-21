@@ -19,17 +19,19 @@ public class SemanticSplitter
             .ToList();
     }
 
+    // embeddings are normalized; dot == cosine similarity
     private static float Dot(float[] a, float[] b)
     {
         float sum = 0f;
-        for (int i = 0; i < a.Length; i++)
-            sum += a[i] * b[i];
+        int n = Math.Min(a.Length, b.Length);
+        for (int i = 0; i < n; i++) sum += a[i] * b[i];
         return sum;
     }
 
+    // Mean embedding over [start,end), then normalize to unit length
     private static float[] Mean(IReadOnlyList<float[]> vecs, int start, int end)
     {
-        int d = vecs[start].Length; //embedding dimension
+        int d = vecs[start].Length;
         var m = new float[d];
 
         for (int i = start; i < end; i++)
@@ -39,23 +41,29 @@ public class SemanticSplitter
         int n = end - start;
         for (int j = 0; j < d; j++) m[j] /= n;
 
-        float norm = (float)Math.Sqrt(m.Sum(x => x * x));
+        float norm = 0f;
+        for (int j = 0; j < d; j++) norm += m[j] * m[j];
+        norm = (float)Math.Sqrt(norm);
+
         if (norm > 0)
             for (int j = 0; j < d; j++) m[j] /= norm;
 
         return m;
     }
 
-    //sliding window approach to find split points based on semantic difference
+    // sliding window divergence peaks
     public List<int> FindSplitPoints(
         IReadOnlyList<float[]> sentenceEmbeddings,
-        int window = 8, //hardcoded value, maybe improve in the future
+        int window = 8,
         float percentile = 0.85f)
     {
-        var scores = new List<(int idx, float div)>();
+        int n = sentenceEmbeddings.Count;
         int half = window / 2;
+        if (n < window + 2) return new();
 
-        for (int i = half; i < sentenceEmbeddings.Count - half; i++)
+        var scores = new List<(int idx, float div)>();
+
+        for (int i = half; i < n - half; i++)
         {
             var left = Mean(sentenceEmbeddings, i - half, i);
             var right = Mean(sentenceEmbeddings, i, i + half);
@@ -65,15 +73,80 @@ public class SemanticSplitter
 
         if (scores.Count == 0) return new();
 
-        var threshold = scores
-            .Select(s => s.div)
-            .OrderBy(x => x)
-            .ElementAt((int)(scores.Count * percentile));
+        var sorted = scores.Select(s => s.div).OrderBy(x => x).ToList();
+        int tIndex = (int)Math.Floor(percentile * (sorted.Count - 1));
+        float threshold = sorted[Math.Clamp(tIndex, 0, sorted.Count - 1)];
 
         return scores
             .Where(s => s.div >= threshold)
             .Select(s => s.idx)
+            .Distinct()
             .OrderBy(i => i)
             .ToList();
     }
+
+    // Turn split points into sentence ranges [start,end)
+    public List<(int start, int end)> BuildRanges(
+        int sentenceCount,
+        List<int> splitPoints,
+        int minSentences = 3,
+        int maxSentences = 20)
+    {
+        var boundaries = new List<int> { 0 };
+        boundaries.AddRange(splitPoints.Where(x => x > 0 && x < sentenceCount));
+        boundaries.Add(sentenceCount);
+
+        boundaries = boundaries.Distinct().OrderBy(x => x).ToList();
+
+        var ranges = new List<(int start, int end)>();
+        for (int i = 0; i < boundaries.Count - 1; i++)
+            ranges.Add((boundaries[i], boundaries[i + 1]));
+
+        // merge too-small chunks
+        var merged = new List<(int start, int end)>();
+        foreach (var r in ranges)
+        {
+            if (merged.Count == 0) { merged.Add(r); continue; }
+
+            int len = r.end - r.start;
+            if (len < minSentences)
+            {
+                var last = merged[^1];
+                merged[^1] = (last.start, r.end);
+            }
+            else
+            {
+                merged.Add(r);
+            }
+        }
+
+        // split too-large chunks
+        var finalRanges = new List<(int start, int end)>();
+        foreach (var r in merged)
+        {
+            int len = r.end - r.start;
+            if (len <= maxSentences)
+            {
+                finalRanges.Add(r);
+            }
+            else
+            {
+                int s = r.start;
+                while (s < r.end)
+                {
+                    int e = Math.Min(r.end, s + maxSentences);
+                    finalRanges.Add((s, e));
+                    s = e;
+                }
+            }
+        }
+
+        return finalRanges;
+    }
+
+    public static string JoinSentences(List<string> sentences, int start, int end)
+        => string.Join(" ", sentences.GetRange(start, end - start)).Trim();
+
+    public float[] ChunkEmbeddingFromSentences(IReadOnlyList<float[]> sentenceEmbeddings, int start, int end)
+        => Mean(sentenceEmbeddings, start, end);
 }

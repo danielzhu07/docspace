@@ -29,11 +29,13 @@ public class DocumentsController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly EmbeddingClient _embed;
+    private readonly SemanticSplitter _splitter;
 
-    public DocumentsController(AppDbContext db, EmbeddingClient embed)
+    public DocumentsController(AppDbContext db, EmbeddingClient embed, SemanticSplitter splitter)
     {
         _db = db;
         _embed = embed;
+        _splitter = splitter;
     }
 
     // ==============================
@@ -75,25 +77,8 @@ public class DocumentsController : ControllerBase
         _db.Documents.Add(doc);
         await _db.SaveChangesAsync();
 
-        // 2) Chunk + embed + store chunks
-        var chunks = TextChunker.Chunk(content);
-        var chunkEntities = new List<DocumentChunk>();
-
-        for (int i = 0; i < chunks.Count; i++)
-        {
-            var emb = await _embed.EmbedAsync(chunks[i]);
-
-            chunkEntities.Add(new DocumentChunk
-            {
-                DocumentId = doc.Id,
-                ChunkIndex = i,
-                Content = chunks[i],
-                Embedding = emb
-            });
-        }
-
-        _db.DocumentChunks.AddRange(chunkEntities);
-        await _db.SaveChangesAsync();
+        // 2) Semantic divergence chunking -> chunks + embeddings
+        await CreateSemanticChunksAsync(doc.Id, content);
 
         return Ok(new
         {
@@ -135,25 +120,8 @@ public class DocumentsController : ControllerBase
         _db.Documents.Add(doc);
         await _db.SaveChangesAsync();
 
-        // 2) Chunk + embed + store chunks
-        var chunks = TextChunker.Chunk(content);
-        var chunkEntities = new List<DocumentChunk>();
-
-        for (int i = 0; i < chunks.Count; i++)
-        {
-            var emb = await _embed.EmbedAsync(chunks[i]);
-
-            chunkEntities.Add(new DocumentChunk
-            {
-                DocumentId = doc.Id,
-                ChunkIndex = i,
-                Content = chunks[i],
-                Embedding = emb
-            });
-        }
-
-        _db.DocumentChunks.AddRange(chunkEntities);
-        await _db.SaveChangesAsync();
+        // 2) Semantic divergence chunking -> chunks + embeddings
+        await CreateSemanticChunksAsync(doc.Id, content);
 
         return Ok(new
         {
@@ -207,7 +175,7 @@ public class DocumentsController : ControllerBase
 
     // ==============================
     // DELETE /documents/{id}
-    // Delete document
+    // Delete document (chunks cascade delete)
     // ==============================
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id)
@@ -220,5 +188,67 @@ public class DocumentsController : ControllerBase
         await _db.SaveChangesAsync();
 
         return NoContent();
+    }
+
+    // ==============================
+    // Helper: semantic divergence chunking + store in DocumentChunks
+    // ==============================
+    private async Task CreateSemanticChunksAsync(Guid documentId, string content)
+    {
+        // If you re-upload the same docId (not typical), avoid duplicates
+        // (safe no-op if none exist)
+        var existing = await _db.DocumentChunks.Where(c => c.DocumentId == documentId).ToListAsync();
+        if (existing.Count > 0)
+        {
+            _db.DocumentChunks.RemoveRange(existing);
+            await _db.SaveChangesAsync();
+        }
+
+        var sentences = _splitter.SplitIntoSentences(content);
+        if (sentences.Count == 0)
+            sentences = new List<string> { content };
+
+        // Batch embed sentences
+        var sentVecsArr = await _embed.EmbedManyAsync(sentences);
+        var sentVecs = sentVecsArr.ToList();
+
+        // Find semantic split points + build ranges
+        var splitPoints = _splitter.FindSplitPoints(sentVecs, window: 8, percentile: 0.85f);
+        var ranges = _splitter.BuildRanges(sentences.Count, splitPoints, minSentences: 3, maxSentences: 20);
+
+        var chunkEntities = new List<DocumentChunk>();
+        int idx = 0;
+
+        foreach (var (start, end) in ranges)
+        {
+            var chunkText = SemanticSplitter.JoinSentences(sentences, start, end);
+            if (chunkText.Length == 0) continue;
+
+            var chunkEmb = _splitter.ChunkEmbeddingFromSentences(sentVecs, start, end);
+
+            chunkEntities.Add(new DocumentChunk
+            {
+                DocumentId = documentId,
+                ChunkIndex = idx++,
+                Content = chunkText,
+                Embedding = chunkEmb
+            });
+        }
+
+        // Fallback: if semantic splitter produces nothing, store whole doc as one chunk
+        if (chunkEntities.Count == 0)
+        {
+            var emb = await _embed.EmbedAsync(content);
+            chunkEntities.Add(new DocumentChunk
+            {
+                DocumentId = documentId,
+                ChunkIndex = 0,
+                Content = content,
+                Embedding = emb
+            });
+        }
+
+        _db.DocumentChunks.AddRange(chunkEntities);
+        await _db.SaveChangesAsync();
     }
 }
