@@ -1,5 +1,6 @@
 using DocSpace.Api.Data;
 using Microsoft.EntityFrameworkCore;
+using DocSpace.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
