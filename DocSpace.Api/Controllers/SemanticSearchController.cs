@@ -19,7 +19,7 @@ public class SemanticSearchController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] int limit = 10)
+    public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] int limit = 10, [FromQuery] float minScore = 0.25f)
     {
         q = (q ?? "").Trim();
         if (q.Length == 0)
@@ -71,6 +71,7 @@ public class SemanticSearchController : ControllerBase
             .OrderByDescending(x => x.score)
             .GroupBy(x => x.id)
             .Select(g => g.First()) // because already sorted by score
+            .Where(x => x.score >= minScore) //min similarity score threshold
             .OrderByDescending(x => x.score)
             .Take(limit)
             .ToList();
@@ -78,6 +79,7 @@ public class SemanticSearchController : ControllerBase
         return Ok(new
         {
             query = q,
+            minScore,
             count = bestPerDoc.Count,
             results = bestPerDoc
         });
