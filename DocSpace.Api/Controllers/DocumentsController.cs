@@ -213,7 +213,7 @@ public class DocumentsController : ControllerBase
         var sentVecs = sentVecsArr.ToList();
 
         // Find semantic split points + build ranges
-        var splitPoints = _splitter.FindSplitPoints(sentVecs, window: 8, percentile: 0.85f);
+        var splitPoints = _splitter.FindSplitPoints(sentVecs, window: 0, percentile: 0.85f);
         var ranges = _splitter.BuildRanges(sentences.Count, splitPoints, minSentences: 3, maxSentences: 20);
 
         var chunkEntities = new List<DocumentChunk>();

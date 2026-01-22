@@ -54,10 +54,20 @@ public class SemanticSplitter
     // sliding window divergence peaks
     public List<int> FindSplitPoints(
         IReadOnlyList<float[]> sentenceEmbeddings,
-        int window = 8,
+        int window = 0,              // 0 means "auto"
         float percentile = 0.85f)
     {
         int n = sentenceEmbeddings.Count;
+        if (n < 10) return new(); // too short to meaningfully split
+
+        // Adaptive window: round(n/12), clamped to [6,16], and enforce even window size
+        if (window <= 0)
+        {
+            window = (int)Math.Round(n / 12.0);
+            window = Math.Clamp(window, 6, 16);
+            if (window % 2 == 1) window += 1; // make it even so half-window is integer
+        }
+
         int half = window / 2;
         if (n < window + 2) return new();
 
@@ -84,6 +94,7 @@ public class SemanticSplitter
             .OrderBy(i => i)
             .ToList();
     }
+
 
     // Turn split points into sentence ranges [start,end)
     public List<(int start, int end)> BuildRanges(
