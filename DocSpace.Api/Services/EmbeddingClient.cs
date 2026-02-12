@@ -27,4 +27,25 @@ public class EmbeddingClient
         // matches Python: {"embedding": [...]}
         public double[]? embedding { get; set; }
     }
+    
+    //Embedding one request per sentence is inefficient, so we provide a batch method
+    public async Task<float[][]> EmbedManyAsync(List<string> texts)
+    {
+        var res = await _http.PostAsJsonAsync("/embed_batch", new { texts });
+        res.EnsureSuccessStatusCode();
+
+        var body = await res.Content.ReadFromJsonAsync<EmbedBatchResponse>();
+        if (body?.embeddings is null)
+            throw new Exception("No embeddings returned.");
+
+        return body.embeddings
+            .Select(v => v.Select(x => (float)x).ToArray())
+            .ToArray();
+    }
+
+    private sealed class EmbedBatchResponse
+    {
+        public double[][]? embeddings { get; set; }
+    }
+
 }
