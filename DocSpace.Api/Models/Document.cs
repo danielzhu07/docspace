@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace DocSpace.Api.Models;
 
 public class Document
@@ -7,6 +10,9 @@ public class Document
     public string Content { get; set; } = "";
     public DateTimeOffset UploadedAt { get; set; } = DateTimeOffset.UtcNow;
 
-    //semantic embedding vector
-    public float[]? Embedding { get; set; }
+    // Legacy single embedding (we will remove later)
+    public float[] Embedding { get; set; } = Array.Empty<float>();
+
+    // NEW
+    public List<DocumentChunk> Chunks { get; set; } = new();
 }

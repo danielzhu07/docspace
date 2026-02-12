@@ -27,54 +27,59 @@ public class SemanticSearchController : ControllerBase
 
         limit = Math.Clamp(limit, 1, 50);
 
-        // Embed the query
+        // Embed query once
         var qVec = await _embed.EmbedAsync(q);
-
-        // Pull recent docs with embeddings
-        var docs = await _db.Documents
-            .Where(d => d.Embedding != null)
-            .OrderByDescending(d => d.UploadedAt)
-            .Take(300)
-            .Select(d => new
-            {
-                d.Id,
-                d.FileName,
-                d.UploadedAt,
-                d.Content,
-                d.Embedding
-            })
-            .ToListAsync();
 
         static float Dot(float[] a, float[] b)
         {
-            float sum = 0f;
+            float s = 0f;
             int n = Math.Min(a.Length, b.Length);
-            for (int i = 0; i < n; i++)
-                sum += a[i] * b[i];
-            return sum;
+            for (int i = 0; i < n; i++) s += a[i] * b[i];
+            return s;
         }
 
-        // embeddings are normalized → dot product == cosine similarity
-        var results = docs
-            .Select(d => new
+        // Pull recent chunks + their parent document metadata
+        // (No navigation properties needed; explicit join)
+        var rows = await (
+            from c in _db.DocumentChunks
+            join d in _db.Documents on c.DocumentId equals d.Id
+            orderby d.UploadedAt descending
+            select new
             {
-                id = d.Id,
-                fileName = d.FileName,
-                uploadedAt = d.UploadedAt,
-                score = Dot(d.Embedding!, qVec),
-                snippet = d.Content.Length > 200
-                    ? d.Content.Substring(0, 200)
-                    : d.Content
+                DocumentId = d.Id,
+                d.FileName,
+                d.UploadedAt,
+                c.ChunkIndex,
+                c.Content,
+                c.Embedding
+            }
+        )
+        .Take(5000) // fine for your current scale
+        .ToListAsync();
+
+        // Score each chunk, take best chunk per document
+        var bestPerDoc = rows
+            .Select(r => new
+            {
+                id = r.DocumentId,
+                fileName = r.FileName,
+                uploadedAt = r.UploadedAt,
+                chunkIndex = r.ChunkIndex,
+                score = Dot(r.Embedding, qVec),
+                snippet = r.Content.Length > 240 ? r.Content.Substring(0, 240) : r.Content
             })
-            .OrderByDescending(r => r.score)
+            .OrderByDescending(x => x.score)
+            .GroupBy(x => x.id)
+            .Select(g => g.First()) // because already sorted by score
+            .OrderByDescending(x => x.score)
             .Take(limit)
             .ToList();
 
         return Ok(new
         {
             query = q,
-            count = results.Count,
-            results
+            count = bestPerDoc.Count,
+            results = bestPerDoc
         });
     }
 }
